@@ -4,11 +4,11 @@ import {
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell, AreaChart, Area, LineChart, Line,
+  PieChart, Pie, Cell, AreaChart, Area, LineChart, Line, ReferenceLine,
 } from 'recharts';
 import { api, filaADoc } from './api';
-import { enfermedadesList } from './constants';
-import { normalizarRegistros, calcular, porAnio, exportarCSV } from './analytics';
+import { enfermedadesList, zonasCuerpo } from './constants';
+import { normalizarRegistros, calcular, porAnio, exportarCSV, aplicarCruzado } from './analytics';
 
 const C = {
   naranja: '#f97316', cian: '#06b6d4', verde: '#10b981', rojo: '#ef4444',
@@ -16,6 +16,9 @@ const C = {
 };
 const SERIE_SEDES = [C.cian, C.naranja, C.violeta, C.verde, C.rosa, C.azul, C.amarillo, C.rojo];
 const COLOR_ESTADO = { 'Personal sano': C.verde, 'Con síntomas / enfermedad': C.amarillo, 'Casos críticos': C.rojo };
+const NIVEL_ESTADO = { 'Personal sano': 'sano', 'Con síntomas / enfermedad': 'sintomas', 'Casos críticos': 'critico' };
+const CF_VACIO = { estado: null, semaforo: null, enfermedad: null, zona: null, cargo: null, area: null, mes: null, antiguedad: null, edad: null };
+const DIMS = Object.keys(CF_VACIO);
 const COLOR_SEM = { 'Sin dolor': '#4ade80', Leve: '#facc15', Medio: '#f97316', Alto: '#ef4444' };
 
 /* ------------------------------------------------------------------ */
@@ -162,13 +165,44 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
     (!desde || ymd(r.fecha) >= desde) && (!hasta || ymd(r.fecha) <= hasta)
   ), [registros, sede, enfermedad, desde, hasta]);
   const filtrados = useMemo(() => porSede.filter((r) => anio === 'todos' || r.anio === Number(anio)), [porSede, anio]);
-  const D = useMemo(() => calcular(filtrados, { anioSel: anio, todosSede: sede === 'todas' }), [filtrados, anio, sede]);
-  const A = useMemo(() => porAnio(porSede), [porSede]);
+
+  // ---- Filtro cruzado entre gráficos (clic en un gráfico = filtro para los demás) ----
+  const [cf, setCf] = useState(CF_VACIO);
+  const hayCf = DIMS.some((d) => cf[d] != null);
+  const alternar = (dim, valor) => setCf((c) => ({ ...c, [dim]: c[dim] === valor ? null : valor }));
+  const alternarAnio = (a) => setAnio((prev) => (prev === String(a) ? 'todos' : String(a)));
+  useEffect(() => { setCf((c) => (c.mes == null ? c : { ...c, mes: null })); }, [anio]);                       // la clave del mes depende del año
+  useEffect(() => { if (sede !== 'todas') setCf((c) => (c.area == null ? c : { ...c, area: null })); }, [sede]);
+
+  const visibles = useMemo(() => aplicarCruzado(filtrados, cf, null), [filtrados, cf]);
+  const D = useMemo(() => calcular(visibles, { anioSel: anio, todosSede: sede === 'todas' }), [visibles, anio, sede]);
+  // Cada gráfico se alimenta con todas las selecciones MENOS la suya: así sigue mostrando todas sus categorías, con la elegida resaltada
+  const X = useMemo(() => {
+    const o = {};
+    DIMS.forEach((d) => { o[d] = calcular(aplicarCruzado(filtrados, cf, d), { anioSel: anio, todosSede: sede === 'todas' }); });
+    return o;
+  }, [filtrados, cf, anio, sede]);
+  const A = useMemo(() => porAnio(aplicarCruzado(porSede, cf, null)), [porSede, cf]);
+  const op = (dim, valor) => (cf[dim] == null || cf[dim] === valor ? 1 : 0.3);   // opacidad: lo no seleccionado se atenúa
+  const opAnio = (a) => (anio === 'todos' || anio === String(a) ? 1 : 0.3);
+  const mesSel = cf.mes != null ? X.mes.mensual.find((m) => m.key === cf.mes)?.mes : null;
+  const etiquetasCf = {
+    estado: cf.estado && `Estado: ${Object.keys(NIVEL_ESTADO).find((n) => NIVEL_ESTADO[n] === cf.estado)}`,
+    semaforo: cf.semaforo && `Severidad: ${cf.semaforo}`,
+    enfermedad: cf.enfermedad != null && `Enfermedad: ${enfermedadesList[cf.enfermedad]}`,
+    zona: cf.zona != null && `Zona: ${zonasCuerpo.find((z) => z.paramId === cf.zona)?.corto}`,
+    cargo: cf.cargo && `Cargo: ${cf.cargo}`,
+    area: cf.area && `Área: ${cf.area}`,
+    mes: cf.mes != null && `Mes: ${mesSel || ''}`,
+    antiguedad: cf.antiguedad && `Antigüedad: ${cf.antiguedad}`,
+    edad: cf.edad && `Edad: ${cf.edad}`,
+  };
 
   const resumenFiltros = [
     anio !== 'todos' && `Año ${anio}`, sede !== 'todas' && `Área: ${sede}`,
     enfermedad !== 'todas' && `Enfermedad: ${enfermedadesList[Number(enfermedad)]}`,
     desde && `Desde ${desde}`, hasta && `Hasta ${hasta}`,
+    ...DIMS.map((d) => etiquetasCf[d]),
   ].filter(Boolean).join(' · ') || 'Sin filtros (todos los datos)';
 
   const ejeColor = isDark ? '#94a3b8' : '#64748b';
@@ -206,13 +240,13 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
           <button onClick={recargar} className={`${theme.inputBg} border px-4 py-2.5 rounded-lg flex items-center gap-2 font-semibold`} title="Volver a leer los datos">
             <RefreshCw className="w-4 h-4" /> Actualizar
           </button>
-          <button onClick={onImprimir} disabled={!filtrados.length}
+          <button onClick={onImprimir} disabled={!visibles.length}
             className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-lg flex items-center gap-2 font-bold shadow-lg">
             <Printer className="w-5 h-5" /> Imprimir / PDF
           </button>
           <button
-            onClick={() => exportarCSV(filtrados)}
-            disabled={!filtrados.length}
+            onClick={() => exportarCSV(visibles)}
+            disabled={!visibles.length}
             className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-lg flex items-center gap-2 font-bold shadow-lg"
           >
             <Download className="w-5 h-5" /> Exportar a Excel
@@ -246,10 +280,29 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
           <label className={`text-sm ${theme.textMuted} flex flex-col gap-1`}>Hasta
             <input type="date" value={hasta} min={desde || undefined} onChange={(e) => setHasta(e.target.value)} className={selectCls} style={{ colorScheme: isDark ? 'dark' : 'light' }} />
           </label>
-          {(anio !== 'todos' || sede !== 'todas' || enfermedad !== 'todas' || desde || hasta) && (
-            <button onClick={() => { setAnio('todos'); setSede('todas'); setEnfermedad('todas'); setDesde(''); setHasta(''); }} className="text-sm text-cyan-500 underline pb-2">
+          {(anio !== 'todos' || sede !== 'todas' || enfermedad !== 'todas' || desde || hasta || hayCf) && (
+            <button onClick={() => { setAnio('todos'); setSede('todas'); setEnfermedad('todas'); setDesde(''); setHasta(''); setCf(CF_VACIO); }} className="text-sm text-cyan-500 underline pb-2">
               Limpiar filtros
             </button>
+          )}
+        </div>
+      )}
+
+      {hayDatos && (
+        <div className={`print:hidden ${theme.textMuted} text-xs flex flex-wrap items-center gap-2 -mt-2`}>
+          {!hayCf ? (
+            <span>💡 Haz clic en una barra, sector o punto de cualquier gráfico para filtrar todos los demás. Vuelve a hacer clic para quitar la selección.</span>
+          ) : (
+            <>
+              <span className="font-semibold">Selección en gráficos:</span>
+              {DIMS.filter((d) => etiquetasCf[d]).map((d) => (
+                <button key={d} onClick={() => setCf((c) => ({ ...c, [d]: null }))} title="Quitar este filtro"
+                  className="bg-cyan-500/15 text-cyan-500 border border-cyan-500/40 rounded-full px-3 py-1 font-semibold hover:bg-cyan-500/25">
+                  {etiquetasCf[d]} ✕
+                </button>
+              ))}
+              <button onClick={() => setCf(CF_VACIO)} className="text-cyan-500 underline">Quitar selección</button>
+            </>
           )}
         </div>
       )}
@@ -262,8 +315,16 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
         </div>
       )}
 
-      {hayDatos && filtrados.length > 0 && (
+      {hayDatos && filtrados.length > 0 && visibles.length === 0 && (
+        <div className={`${theme.cardBg} border ${theme.border} rounded-xl p-10 text-center ${theme.textMuted}`}>
+          No hay encuestas que cumplan la selección actual.{' '}
+          <button onClick={() => setCf(CF_VACIO)} className="text-cyan-500 underline">Quitar selección</button>
+        </div>
+      )}
+
+      {hayDatos && visibles.length > 0 && (
         <>
+          <style>{`.cf-click .recharts-wrapper { cursor: pointer; }`}</style>
           {/* ---------------- KPI ---------------- */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <Kpi theme={theme} titulo="Total encuestas" valor={k.total} color="text-cyan-500"
@@ -284,15 +345,15 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
               detalle={k.zonaTop ? `${k.zonaTop.casos} casos (${k.zonaTop.pct}%) · sev. prom. ${k.zonaTop.sevProm}` : 'Sin dolor reportado'} />
             <Kpi theme={theme} titulo="Enfermedad más frecuente" valor={k.enfTop?.name} color="text-cyan-500"
               detalle={k.enfTop ? `${k.enfTop.casos} casos` : 'Sin diagnósticos reportados'} />
-            <Kpi theme={theme} titulo="Área con mayor prevalencia" valor={k.sedeTop?.sede || (sede !== 'todas' ? sede : '—')} color="text-violet-400"
-              detalle={k.sedeTop ? `${k.sedeTop.conDolor}% con dolor · ${k.sedeTop.criticosN} críticos` : sede !== 'todas' ? 'Área filtrada' : 'Se necesitan 2 o más áreas'} />
+            <Kpi theme={theme} titulo="Área con mayor prevalencia" valor={k.sedeTop?.sede || (sede !== 'todas' ? sede : cf.area || '—')} color="text-violet-400"
+              detalle={k.sedeTop ? `${k.sedeTop.conDolor}% con dolor · ${k.sedeTop.criticosN} críticos` : sede !== 'todas' || cf.area ? 'Área filtrada' : 'Se necesitan 2 o más áreas'} />
             <Kpi theme={theme} titulo="Antigüedad promedio" valor={k.antiguedadProm != null ? `${k.antiguedadProm} años` : '—'} color="text-cyan-500"
               detalle="Según fecha de ingreso" />
             <Kpi theme={theme} titulo="Edad promedio" valor={k.edadProm != null ? `${k.edadProm} años` : '—'} color="text-cyan-500"
               detalle="Según fecha de nacimiento" />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="cf-click grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* ---------------- Por año ---------------- */}
             <Tarjeta theme={theme} titulo="Encuestas por año y área" subtitulo="Respeta los filtros de área, enfermedad y fecha" vacio={!A.filas.length}>
               <div className="h-64 w-full">
@@ -304,7 +365,9 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
                     {A.sedes.length > 1 && <Legend />}
                     {A.sedes.map((s, i) => (
                       <Bar key={s} dataKey={s} stackId="a" fill={SERIE_SEDES[i % SERIE_SEDES.length]}
-                        radius={i === A.sedes.length - 1 ? [4, 4, 0, 0] : 0} />
+                        radius={i === A.sedes.length - 1 ? [4, 4, 0, 0] : 0} onClick={(d) => alternarAnio(d.payload.anio)}>
+                        {A.filas.map((f) => <Cell key={f.anio} fill={SERIE_SEDES[i % SERIE_SEDES.length]} fillOpacity={opAnio(f.anio)} />)}
+                      </Bar>
                     ))}
                   </BarChart>
                 </ResponsiveContainer>
@@ -314,7 +377,7 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
             <Tarjeta theme={theme} titulo="Evolución anual de indicadores (%)" subtitulo="Dolor, enfermedad diagnosticada y casos críticos por año" vacio={!A.filas.length}>
               <div className="h-64 w-full">
                 <ResponsiveContainer>
-                  <LineChart data={A.filas}>
+                  <LineChart data={A.filas} onClick={(st) => { const a = st?.activePayload?.[0]?.payload?.anio; if (a) alternarAnio(a); }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis dataKey="anio" {...ejes} /><YAxis unit="%" domain={[0, 100]} {...ejes} />
                     <Tooltip {...tip} formatter={(v) => `${v}%`} /><Legend />
@@ -327,28 +390,30 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
             </Tarjeta>
 
             {/* ---------------- Evolución mensual ---------------- */}
-            <Tarjeta theme={theme} ancho titulo={anio !== 'todos' ? `Evolución mensual · ${anio}` : 'Evolución mensual (todos los años)'} vacio={!D.mensual.length}>
+            <Tarjeta theme={theme} ancho titulo={anio !== 'todos' ? `Evolución mensual · ${anio}` : 'Evolución mensual (todos los años)'} vacio={!X.mes.mensual.length}>
               <div className="h-64 w-full">
                 <ResponsiveContainer>
-                  <AreaChart data={D.mensual}>
+                  <AreaChart data={X.mes.mensual} onClick={(st) => { const k2 = st?.activePayload?.[0]?.payload?.key; if (k2 != null) alternar('mes', k2); }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis dataKey="mes" {...ejes} /><YAxis allowDecimals={false} {...ejes} />
                     <Tooltip {...tip} /><Legend />
                     <Area type="monotone" name="Encuestas" dataKey="encuestas" stroke={C.cian} fill={C.cian} fillOpacity={0.25} />
                     <Area type="monotone" name="Con síntomas" dataKey="sintomas" stroke={C.amarillo} fill={C.amarillo} fillOpacity={0.2} />
                     <Area type="monotone" name="Críticos" dataKey="criticos" stroke={C.rojo} fill={C.rojo} fillOpacity={0.3} />
+                    {mesSel && <ReferenceLine x={mesSel} stroke={C.naranja} strokeWidth={2} strokeDasharray="4 4" />}
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
             </Tarjeta>
 
             {/* ---------------- Estado general ---------------- */}
-            <Tarjeta theme={theme} titulo="Estado de salud del personal" vacio={!D.estado.length}>
+            <Tarjeta theme={theme} titulo="Estado de salud del personal" vacio={!X.estado.estado.length}>
               <div className="h-64 w-full">
                 <ResponsiveContainer>
                   <PieChart>
-                    <Pie data={D.estado} cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={4} dataKey="value" label>
-                      {D.estado.map((e) => <Cell key={e.name} fill={COLOR_ESTADO[e.name]} stroke="none" />)}
+                    <Pie data={X.estado.estado} cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={4} dataKey="value" label
+                      onClick={(d) => alternar('estado', NIVEL_ESTADO[d?.name ?? d?.payload?.name])}>
+                      {X.estado.estado.map((e) => <Cell key={e.name} fill={COLOR_ESTADO[e.name]} fillOpacity={op('estado', NIVEL_ESTADO[e.name])} stroke="none" />)}
                     </Pie>
                     <Tooltip {...tip} /><Legend />
                   </PieChart>
@@ -356,12 +421,13 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
               </div>
             </Tarjeta>
 
-            <Tarjeta theme={theme} titulo="Nivel de severidad (semáforo)" subtitulo="Según la mayor severidad reportada por persona" vacio={!D.semaforo.length}>
+            <Tarjeta theme={theme} titulo="Nivel de severidad (semáforo)" subtitulo="Según la mayor severidad reportada por persona" vacio={!X.semaforo.semaforo.length}>
               <div className="h-64 w-full">
                 <ResponsiveContainer>
                   <PieChart>
-                    <Pie data={D.semaforo} cx="50%" cy="50%" outerRadius={85} dataKey="value" label>
-                      {D.semaforo.map((e) => <Cell key={e.name} fill={COLOR_SEM[e.name]} stroke="none" />)}
+                    <Pie data={X.semaforo.semaforo} cx="50%" cy="50%" outerRadius={85} dataKey="value" label
+                      onClick={(d) => alternar('semaforo', d?.name ?? d?.payload?.name)}>
+                      {X.semaforo.semaforo.map((e) => <Cell key={e.name} fill={COLOR_SEM[e.name]} fillOpacity={op('semaforo', e.name)} stroke="none" />)}
                     </Pie>
                     <Tooltip {...tip} /><Legend />
                   </PieChart>
@@ -370,45 +436,49 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
             </Tarjeta>
 
             {/* ---------------- Enfermedades y zonas ---------------- */}
-            <Tarjeta theme={theme} titulo="Enfermedades diagnosticadas" vacio={!D.enfCont.length}>
-              <div style={{ height: alto(D.enfCont.length) }} className="w-full">
+            <Tarjeta theme={theme} titulo="Enfermedades diagnosticadas" vacio={!X.enfermedad.enfCont.length}>
+              <div style={{ height: alto(X.enfermedad.enfCont.length) }} className="w-full">
                 <ResponsiveContainer>
-                  <BarChart data={D.enfCont} layout="vertical" margin={{ left: 10 }}>
+                  <BarChart data={X.enfermedad.enfCont} layout="vertical" margin={{ left: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis type="number" allowDecimals={false} {...ejes} />
                     <YAxis type="category" dataKey="name" width={170} {...ejes} />
                     <Tooltip {...tip} />
-                    <Bar dataKey="casos" name="Casos" fill={C.naranja} radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="casos" name="Casos" fill={C.naranja} radius={[0, 4, 4, 0]} onClick={(d) => alternar('enfermedad', enfermedadesList.indexOf(d.payload.name))}>
+                      {X.enfermedad.enfCont.map((e) => <Cell key={e.name} fill={C.naranja} fillOpacity={op('enfermedad', enfermedadesList.indexOf(e.name))} />)}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </Tarjeta>
 
-            <Tarjeta theme={theme} titulo="Zonas corporales con dolor" subtitulo="Número de personas que reportan dolor en cada zona" vacio={!D.zonasFrecuencia.length}>
-              <div style={{ height: alto(D.zonasFrecuencia.length) }} className="w-full">
+            <Tarjeta theme={theme} titulo="Zonas corporales con dolor" subtitulo="Número de personas que reportan dolor en cada zona" vacio={!X.zona.zonasFrecuencia.length}>
+              <div style={{ height: alto(X.zona.zonasFrecuencia.length) }} className="w-full">
                 <ResponsiveContainer>
-                  <BarChart data={D.zonasFrecuencia} layout="vertical" margin={{ left: 10 }}>
+                  <BarChart data={X.zona.zonasFrecuencia} layout="vertical" margin={{ left: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis type="number" allowDecimals={false} {...ejes} />
                     <YAxis type="category" dataKey="name" width={110} {...ejes} />
                     <Tooltip {...tip} />
-                    <Bar dataKey="casos" name="Personas" fill={C.cian} radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="casos" name="Personas" fill={C.cian} radius={[0, 4, 4, 0]} onClick={(d) => alternar('zona', d.payload.id)}>
+                      {X.zona.zonasFrecuencia.map((z) => <Cell key={z.id} fill={C.cian} fillOpacity={op('zona', z.id)} />)}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </Tarjeta>
 
-            <Tarjeta theme={theme} titulo="Severidad promedio por zona" subtitulo="Escala 1-10 entre quienes reportan dolor" vacio={!D.zonasSeveridad.length}>
-              <div style={{ height: alto(D.zonasSeveridad.length) }} className="w-full">
+            <Tarjeta theme={theme} titulo="Severidad promedio por zona" subtitulo="Escala 1-10 entre quienes reportan dolor" vacio={!X.zona.zonasSeveridad.length}>
+              <div style={{ height: alto(X.zona.zonasSeveridad.length) }} className="w-full">
                 <ResponsiveContainer>
-                  <BarChart data={D.zonasSeveridad} layout="vertical" margin={{ left: 10 }}>
+                  <BarChart data={X.zona.zonasSeveridad} layout="vertical" margin={{ left: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis type="number" domain={[0, 10]} {...ejes} />
                     <YAxis type="category" dataKey="name" width={110} {...ejes} />
                     <Tooltip {...tip} />
-                    <Bar dataKey="sevProm" name="Severidad prom." radius={[0, 4, 4, 0]}>
-                      {D.zonasSeveridad.map((z) => (
-                        <Cell key={z.id} fill={z.sevProm >= 7 ? '#ef4444' : z.sevProm >= 4 ? '#f97316' : '#facc15'} />
+                    <Bar dataKey="sevProm" name="Severidad prom." radius={[0, 4, 4, 0]} onClick={(d) => alternar('zona', d.payload.id)}>
+                      {X.zona.zonasSeveridad.map((z) => (
+                        <Cell key={z.id} fill={z.sevProm >= 7 ? '#ef4444' : z.sevProm >= 4 ? '#f97316' : '#facc15'} fillOpacity={op('zona', z.id)} />
                       ))}
                     </Bar>
                   </BarChart>
@@ -416,16 +486,20 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
               </div>
             </Tarjeta>
 
-            <Tarjeta theme={theme} titulo="Cargos con más casos" subtitulo="Personas con dolor o enfermedad por cargo" vacio={!D.cargos.length}>
-              <div style={{ height: alto(D.cargos.length) }} className="w-full">
+            <Tarjeta theme={theme} titulo="Cargos con más casos" subtitulo="Personas con dolor o enfermedad por cargo" vacio={!X.cargo.cargos.length}>
+              <div style={{ height: alto(X.cargo.cargos.length) }} className="w-full">
                 <ResponsiveContainer>
-                  <BarChart data={D.cargos} layout="vertical" margin={{ left: 10 }}>
+                  <BarChart data={X.cargo.cargos} layout="vertical" margin={{ left: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis type="number" allowDecimals={false} {...ejes} />
                     <YAxis type="category" dataKey="name" width={130} {...ejes} />
                     <Tooltip {...tip} /><Legend />
-                    <Bar dataKey="casos" name="Con casos" fill={C.rojo} radius={[0, 4, 4, 0]} />
-                    <Bar dataKey="personas" name="Encuestados" fill={C.azul} radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="casos" name="Con casos" fill={C.rojo} radius={[0, 4, 4, 0]} onClick={(d) => alternar('cargo', d.payload.name)}>
+                      {X.cargo.cargos.map((c) => <Cell key={c.name} fill={C.rojo} fillOpacity={op('cargo', c.name)} />)}
+                    </Bar>
+                    <Bar dataKey="personas" name="Encuestados" fill={C.azul} radius={[0, 4, 4, 0]} onClick={(d) => alternar('cargo', d.payload.name)}>
+                      {X.cargo.cargos.map((c) => <Cell key={c.name} fill={C.azul} fillOpacity={op('cargo', c.name)} />)}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -434,43 +508,53 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
             {/* ---------------- Por sede ---------------- */}
             {sede === 'todas' && (
               <>
-                <Tarjeta theme={theme} titulo="Encuestas por área" vacio={!D.sedeStats.length}>
-                  <div style={{ height: alto(D.sedeStats.length) }} className="w-full">
+                <Tarjeta theme={theme} titulo="Encuestas por área" vacio={!X.area.sedeStats.length}>
+                  <div style={{ height: alto(X.area.sedeStats.length) }} className="w-full">
                     <ResponsiveContainer>
-                      <BarChart data={D.sedeStats} layout="vertical" margin={{ left: 10 }}>
+                      <BarChart data={X.area.sedeStats} layout="vertical" margin={{ left: 10 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                         <XAxis type="number" allowDecimals={false} {...ejes} />
                         <YAxis type="category" dataKey="sede" width={110} {...ejes} />
                         <Tooltip {...tip} />
-                        <Bar dataKey="encuestas" name="Encuestas" fill={C.cian} radius={[0, 4, 4, 0]} />
+                        <Bar dataKey="encuestas" name="Encuestas" fill={C.cian} radius={[0, 4, 4, 0]} onClick={(d) => alternar('area', d.payload.sede)}>
+                          {X.area.sedeStats.map((e) => <Cell key={e.sede} fill={C.cian} fillOpacity={op('area', e.sede)} />)}
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
                 </Tarjeta>
 
-                <Tarjeta theme={theme} titulo="Indicadores por área (%)" subtitulo="% del personal de cada área" vacio={!D.sedeStats.length}>
+                <Tarjeta theme={theme} titulo="Indicadores por área (%)" subtitulo="% del personal de cada área" vacio={!X.area.sedeStats.length}>
                   <div className="h-64 w-full">
                     <ResponsiveContainer>
-                      <BarChart data={D.sedeStats}>
+                      <BarChart data={X.area.sedeStats}>
                         <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                         <XAxis dataKey="sede" {...ejes} /><YAxis unit="%" domain={[0, 100]} {...ejes} />
                         <Tooltip {...tip} formatter={(v) => `${v}%`} /><Legend />
-                        <Bar dataKey="conDolor" name="Con dolor" fill={C.amarillo} radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="conEnf" name="Con enfermedad" fill={C.naranja} radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="criticos" name="Críticos" fill={C.rojo} radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="conDolor" name="Con dolor" fill={C.amarillo} radius={[4, 4, 0, 0]} onClick={(d) => alternar('area', d.payload.sede)}>
+                          {X.area.sedeStats.map((e) => <Cell key={e.sede} fill={C.amarillo} fillOpacity={op('area', e.sede)} />)}
+                        </Bar>
+                        <Bar dataKey="conEnf" name="Con enfermedad" fill={C.naranja} radius={[4, 4, 0, 0]} onClick={(d) => alternar('area', d.payload.sede)}>
+                          {X.area.sedeStats.map((e) => <Cell key={e.sede} fill={C.naranja} fillOpacity={op('area', e.sede)} />)}
+                        </Bar>
+                        <Bar dataKey="criticos" name="Críticos" fill={C.rojo} radius={[4, 4, 0, 0]} onClick={(d) => alternar('area', d.payload.sede)}>
+                          {X.area.sedeStats.map((e) => <Cell key={e.sede} fill={C.rojo} fillOpacity={op('area', e.sede)} />)}
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
                 </Tarjeta>
 
-                <Tarjeta theme={theme} titulo="Severidad promedio por área" subtitulo="Escala 1-10" vacio={!D.sedeStats.some((s) => s.sevProm > 0)}>
+                <Tarjeta theme={theme} titulo="Severidad promedio por área" subtitulo="Escala 1-10" vacio={!X.area.sedeStats.some((s) => s.sevProm > 0)}>
                   <div className="h-64 w-full">
                     <ResponsiveContainer>
-                      <BarChart data={D.sedeStats}>
+                      <BarChart data={X.area.sedeStats}>
                         <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                         <XAxis dataKey="sede" {...ejes} /><YAxis domain={[0, 10]} {...ejes} />
                         <Tooltip {...tip} />
-                        <Bar dataKey="sevProm" name="Severidad prom." fill={C.violeta} radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="sevProm" name="Severidad prom." fill={C.violeta} radius={[4, 4, 0, 0]} onClick={(d) => alternar('area', d.payload.sede)}>
+                          {X.area.sedeStats.map((e) => <Cell key={e.sede} fill={C.violeta} fillOpacity={op('area', e.sede)} />)}
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -479,42 +563,50 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
             )}
 
             {/* ---------------- Perfil del personal ---------------- */}
-            <Tarjeta theme={theme} titulo="Dolor según antigüedad en la empresa" subtitulo="% de personas con dolor y casos críticos por rango" vacio={!D.porAntiguedad.length}>
+            <Tarjeta theme={theme} titulo="Dolor según antigüedad en la empresa" subtitulo="% de personas con dolor y casos críticos por rango" vacio={!X.antiguedad.porAntiguedad.length}>
               <div className="h-64 w-full">
                 <ResponsiveContainer>
-                  <BarChart data={D.porAntiguedad}>
+                  <BarChart data={X.antiguedad.porAntiguedad}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis dataKey="rango" {...ejes} /><YAxis unit="%" domain={[0, 100]} {...ejes} />
                     <Tooltip {...tip} formatter={(v) => `${v}%`} /><Legend />
-                    <Bar dataKey="conDolor" name="Con dolor" fill={C.amarillo} radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="criticos" name="Críticos" fill={C.rojo} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="conDolor" name="Con dolor" fill={C.amarillo} radius={[4, 4, 0, 0]} onClick={(d) => alternar('antiguedad', d.payload.rango)}>
+                      {X.antiguedad.porAntiguedad.map((e) => <Cell key={e.rango} fill={C.amarillo} fillOpacity={op('antiguedad', e.rango)} />)}
+                    </Bar>
+                    <Bar dataKey="criticos" name="Críticos" fill={C.rojo} radius={[4, 4, 0, 0]} onClick={(d) => alternar('antiguedad', d.payload.rango)}>
+                      {X.antiguedad.porAntiguedad.map((e) => <Cell key={e.rango} fill={C.rojo} fillOpacity={op('antiguedad', e.rango)} />)}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </Tarjeta>
 
-            <Tarjeta theme={theme} titulo="Dolor según rango de edad" subtitulo="% de personas con dolor y casos críticos por rango" vacio={!D.porEdad.length}>
+            <Tarjeta theme={theme} titulo="Dolor según rango de edad" subtitulo="% de personas con dolor y casos críticos por rango" vacio={!X.edad.porEdad.length}>
               <div className="h-64 w-full">
                 <ResponsiveContainer>
-                  <BarChart data={D.porEdad}>
+                  <BarChart data={X.edad.porEdad}>
                     <CartesianGrid strokeDasharray="3 3" stroke={rejilla} />
                     <XAxis dataKey="rango" {...ejes} /><YAxis unit="%" domain={[0, 100]} {...ejes} />
                     <Tooltip {...tip} formatter={(v) => `${v}%`} /><Legend />
-                    <Bar dataKey="conDolor" name="Con dolor" fill={C.amarillo} radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="criticos" name="Críticos" fill={C.rojo} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="conDolor" name="Con dolor" fill={C.amarillo} radius={[4, 4, 0, 0]} onClick={(d) => alternar('edad', d.payload.rango)}>
+                      {X.edad.porEdad.map((e) => <Cell key={e.rango} fill={C.amarillo} fillOpacity={op('edad', e.rango)} />)}
+                    </Bar>
+                    <Bar dataKey="criticos" name="Críticos" fill={C.rojo} radius={[4, 4, 0, 0]} onClick={(d) => alternar('edad', d.payload.rango)}>
+                      {X.edad.porEdad.map((e) => <Cell key={e.rango} fill={C.rojo} fillOpacity={op('edad', e.rango)} />)}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </Tarjeta>
 
             {/* ---------------- Mapas de calor por sede ---------------- */}
-            {sede === 'todas' && D.sedes.length > 1 && (
+            {sede === 'todas' && X.area.sedes.length > 1 && (
               <>
-                <Tarjeta theme={theme} ancho titulo="Mapa de calor: zona corporal por área" vacio={!D.zonasFrecuencia.length}>
-                  <MapaCalor filas={D.calorZonas} sedes={D.sedes} theme={theme} isDark={isDark} color="#06b6d4" />
+                <Tarjeta theme={theme} ancho titulo="Mapa de calor: zona corporal por área" vacio={!X.area.zonasFrecuencia.length}>
+                  <MapaCalor filas={X.area.calorZonas} sedes={X.area.sedes} theme={theme} isDark={isDark} color="#06b6d4" />
                 </Tarjeta>
-                <Tarjeta theme={theme} ancho titulo="Mapa de calor: enfermedad por área" vacio={!D.enfCont.length}>
-                  <MapaCalor filas={D.calorEnf} sedes={D.sedes} theme={theme} isDark={isDark} color="#f97316" />
+                <Tarjeta theme={theme} ancho titulo="Mapa de calor: enfermedad por área" vacio={!X.area.enfCont.length}>
+                  <MapaCalor filas={X.area.calorEnf} sedes={X.area.sedes} theme={theme} isDark={isDark} color="#f97316" />
                 </Tarjeta>
               </>
             )}

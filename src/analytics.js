@@ -104,6 +104,28 @@ const porRango = (regs, rangos, campo) =>
     })
     .filter((x) => x.personas > 0);
 
+/**
+ * Filtro cruzado entre gráficos (estilo Power BI).
+ * cf = { estado, semaforo, enfermedad, zona, cargo, area, mes, antiguedad, edad } (null = sin selección).
+ * `omitir` deja fuera la dimensión de un gráfico para que ese gráfico siga mostrando todas sus categorías
+ * (con la seleccionada resaltada) mientras los demás sí se filtran.
+ */
+export function aplicarCruzado(regs, cf, omitir) {
+  const act = (k) => omitir !== k && cf[k] != null;
+  const rango = (lista, nombre) => lista.find((x) => x.n === nombre);
+  return regs.filter((r) =>
+    (!act('estado') || r.nivel === cf.estado) &&
+    (!act('semaforo') || r.semaforo === cf.semaforo) &&
+    (!act('enfermedad') || r.enfermedades.includes(cf.enfermedad)) &&
+    (!act('zona') || r.zonas.some((z) => z.id === cf.zona)) &&
+    (!act('cargo') || r.cargo === cf.cargo) &&
+    (!act('area') || r.sede === cf.area) &&
+    (!act('mes') || (cf.mes < 12 ? r.mes === cf.mes : r.anio * 12 + r.mes === cf.mes)) &&
+    (!act('antiguedad') || (r.antiguedad != null && !!rango(RANGOS_ANT, cf.antiguedad)?.f(r.antiguedad))) &&
+    (!act('edad') || (r.edad != null && !!rango(RANGOS_EDAD, cf.edad)?.f(r.edad)))
+  );
+}
+
 /** Calcula todos los KPI y series para los gráficos a partir de los registros filtrados. */
 export function calcular(regs, { anioSel, todosSede }) {
   const total = regs.length;
@@ -162,7 +184,7 @@ export function calcular(regs, { anioSel, todosSede }) {
     mensual = MESES.map((mes, i) => {
       const g = regs.filter((r) => r.mes === i);
       return {
-        mes, encuestas: g.length,
+        mes, key: i, encuestas: g.length,
         sintomas: g.filter((r) => r.nivel === 'sintomas').length,
         criticos: g.filter((r) => r.nivel === 'critico').length,
       };
@@ -172,7 +194,7 @@ export function calcular(regs, { anioSel, todosSede }) {
     mensual = keys.map((k) => {
       const g = regs.filter((r) => r.anio * 12 + r.mes === k);
       return {
-        mes: `${MESES[k % 12]} ${String(Math.floor(k / 12)).slice(2)}`, encuestas: g.length,
+        mes: `${MESES[k % 12]} ${String(Math.floor(k / 12)).slice(2)}`, key: k, encuestas: g.length,
         sintomas: g.filter((r) => r.nivel === 'sintomas').length,
         criticos: g.filter((r) => r.nivel === 'critico').length,
       };

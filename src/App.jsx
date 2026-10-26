@@ -32,6 +32,15 @@ export default function App() {
     enfermedades: {}, dolorZonas: {}
   };
   const [formData, setFormData] = useState(formVacio);
+  const [intentado, setIntentado] = useState(false); // true tras pulsar "Registrar" con campos vacíos
+
+  // Campos obligatorios sin valor (se recalcula en vivo mientras el usuario completa)
+  const CAMPOS_OBLIGATORIOS = [['cc', 'Cédula'], ['fechaNacimiento', 'Fecha de nacimiento'], ['fechaIngreso', 'Fecha de ingreso'], ['cargo', 'Cargo']];
+  const camposFaltantes = CAMPOS_OBLIGATORIOS.filter(([c]) => !String(formData[c] || '').trim()).map(([c]) => c);
+  const zonasFaltantes = zonasCuerpo.filter((z) => !['si', 'no'].includes(formData.dolorZonas[z.paramId]?.siente)).map((z) => z.paramId);
+  const hayFaltantes = camposFaltantes.length > 0 || zonasFaltantes.length > 0;
+  const errCampo = (c) => intentado && camposFaltantes.includes(c);
+  const errZona = (id) => intentado && zonasFaltantes.includes(id);
 
   const cargarUsuarios = async () => {
     setCargandoUsuarios(true); setErrorUsuarios('');
@@ -43,7 +52,7 @@ export default function App() {
 
   // Al elegir un usuario se consulta si ya respondió en el período configurado
   const elegirUsuario = async (u) => {
-    setUsuarioSel(u); setEstadoUsuario(null); setResultado(null);
+    setUsuarioSel(u); setEstadoUsuario(null); setResultado(null); setIntentado(false);
     if (!u) return;
     setConsultando(true);
     try { setEstadoUsuario(await api('estadoUsuario', { idUsuario: u.id })); }
@@ -56,6 +65,11 @@ export default function App() {
     setResultado(null);
     if (!usuarioSel) { setResultado({ ok: false, msg: 'Selecciona tu nombre de la lista.' }); return; }
     if (!estadoUsuario?.puede) return;
+    if (hayFaltantes) {
+      setIntentado(true);
+      setTimeout(() => document.querySelector('[data-falta="true"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+      return;
+    }
     // Completa los valores por defecto de los campos que el usuario no tocó
     const enfermedades = {};
     enfermedadesList.forEach((_, i) => {
@@ -79,7 +93,7 @@ export default function App() {
         datos: { ...formData, enfermedades, dolorZonas },
       });
       setResultado({ ok: true, msg: 'Encuesta registrada exitosamente. ¡Gracias por responder!' });
-      setFormData(formVacio);
+      setFormData(formVacio); setIntentado(false);
       setUsuarioSel(null); setEstadoUsuario(null);
       setFormKey((k) => k + 1);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -155,7 +169,7 @@ export default function App() {
           />
         </div>
         <span className={`text-xl font-bold tracking-wider ${isDark ? 'text-white' : 'text-slate-800'}`}>
-          SALUD<span className="text-cyan-500">OCUPACIONAL</span>
+          SEGURIDAD Y SALUD EN EL TRABAJO <span className="text-cyan-500">(SST)</span>
         </span>
       </div>
       <div className="flex items-center gap-4">
@@ -184,7 +198,7 @@ export default function App() {
               <p className={`${theme.textMuted} text-lg`}>Sistema de Gestión de Seguridad y Salud en el Trabajo</p>
             </div>
 
-            <form key={formKey} className="p-6 md:p-10 space-y-8" onSubmit={registrarEncuesta}>
+            <form key={formKey} noValidate className="p-6 md:p-10 space-y-8" onSubmit={registrarEncuesta}>
               {resultado && (
                 <div className={`rounded-lg p-4 text-sm font-semibold border ${resultado.ok ? 'bg-emerald-500/10 border-emerald-500 text-emerald-500' : 'bg-red-500/10 border-red-500 text-red-500'}`}>
                   {resultado.msg}
@@ -214,10 +228,11 @@ export default function App() {
                   )}
                   {[['cc', 'Cédula'], ['fechaNacimiento', 'Fecha de nacimiento'], ['fechaIngreso', 'Fecha de ingreso'], ['cargo', 'Cargo']].map(([campo, etiqueta]) => (
                     <div key={campo}>
-                      <label className={`block text-sm ${theme.textMuted} mb-1`}>{etiqueta}:</label>
+                      <label className={`block text-sm ${theme.textMuted} mb-1`}>{etiqueta}: <span className="text-red-500">*</span></label>
                       <input
-                        type={campo.includes('fecha') ? 'date' : 'text'} name={campo} value={formData[campo]} onChange={handleInputChange} required={campo === 'cc'}
-                        className={`w-full ${theme.inputBg} rounded p-3 focus:ring-2 focus:ring-cyan-500 outline-none border transition-colors`}
+                        type={campo.includes('fecha') ? 'date' : 'text'} name={campo} value={formData[campo]} onChange={handleInputChange} required
+                        data-falta={errCampo(campo) ? 'true' : undefined} aria-invalid={errCampo(campo) || undefined}
+                        className={`w-full ${theme.inputBg} rounded p-3 focus:ring-2 focus:ring-cyan-500 outline-none border transition-colors ${errCampo(campo) ? '!border-red-500 ring-2 ring-red-500/60' : ''}`}
                         style={{colorScheme: isDark ? 'dark' : 'light'}}
                       />
                     </div>
@@ -294,10 +309,11 @@ export default function App() {
                     <div className="space-y-4">
                       {zonasCuerpo.map((zona) => (
                         <div key={zona.id} className="grid grid-cols-[2fr_1fr_2fr] gap-4 items-center">
-                          <div className="text-sm font-medium">{zona.nombre}</div>
+                          <div className={`text-sm font-medium ${errZona(zona.paramId) ? 'text-red-500' : ''}`}>{zona.nombre} <span className="text-red-500">*</span></div>
                           <div className="flex justify-center">
                             <select 
-                              className={`${theme.inputBg} border rounded p-1.5 w-full text-center outline-none focus:ring-1 focus:ring-cyan-500`}
+                              data-falta={errZona(zona.paramId) ? 'true' : undefined} aria-invalid={errZona(zona.paramId) || undefined}
+                              className={`${theme.inputBg} border rounded p-1.5 w-full text-center outline-none focus:ring-1 focus:ring-cyan-500 ${errZona(zona.paramId) ? '!border-red-500 ring-2 ring-red-500/60' : ''}`}
                               onChange={(e) => handleDolor(zona.paramId, 'siente', e.target.value)} defaultValue="--"
                             >
                               <option value="--">--</option><option value="si">SI</option><option value="no">NO</option>
@@ -362,6 +378,18 @@ export default function App() {
               </section>
 
               </div>
+
+              {intentado && hayFaltantes && (
+                <div role="alert" className="rounded-lg p-4 text-sm font-semibold border bg-red-500/10 border-red-500 text-red-500">
+                  Debes completar todos los campos obligatorios antes de registrar la encuesta.
+                  <span className="block font-normal mt-1">
+                    Falta: {[
+                      ...CAMPOS_OBLIGATORIOS.filter(([c]) => camposFaltantes.includes(c)).map(([, e]) => e),
+                      ...(zonasFaltantes.length ? [`Sintomatología dolorosa (${zonasFaltantes.length} ${zonasFaltantes.length === 1 ? 'zona sin responder' : 'zonas sin responder'}: SI / NO)`] : []),
+                    ].join(', ')}.
+                  </span>
+                </div>
+              )}
 
               <div className="flex justify-center pt-2">
                 <button type="submit" disabled={enviando || !usuarioSel || !estadoUsuario?.puede} className="bg-orange-500 hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-12 py-4 rounded-lg font-bold text-lg shadow-lg shadow-orange-500/20 flex items-center gap-3 transition-transform hover:scale-105">

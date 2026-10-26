@@ -20,6 +20,14 @@ const VENTANA = 10 * 60 * 1000, MAX_FALLOS = 8;
 const bloqueada = (ip) => (fallos.get(ip) || []).filter((t) => Date.now() - t < VENTANA).length >= MAX_FALLOS;
 const registrarFallo = (ip) => fallos.set(ip, [...(fallos.get(ip) || []).filter((t) => Date.now() - t < VENTANA), Date.now()]);
 
+// Campos obligatorios de la encuesta (se valida también aquí por si alguien omite el formulario)
+const validarEncuesta = (d = {}) => {
+  const vacio = (v) => !String(v ?? '').trim();
+  if (['cc', 'fechaNacimiento', 'fechaIngreso', 'cargo'].some((c) => vacio(d[c]))) return 'Completa todos los campos obligatorios.';
+  for (let i = 1; i <= 14; i++) if (!['si', 'no'].includes(d.dolorZonas?.[i]?.siente)) return 'Responde SI o NO en todas las zonas corporales.';
+  return null;
+};
+
 const app = express();
 app.use(express.json({ limit: '200kb' }));
 
@@ -27,6 +35,7 @@ app.post('/api', async (req, res) => {
   const { action, ...resto } = req.body || {};
   const requierePin = CON_PIN.includes(action);
   if (!PUBLICAS.includes(action) && !requierePin) return res.status(400).json({ ok: false, error: 'Acción no permitida' });
+  if (action === 'guardarEncuesta') { const e = validarEncuesta(resto.datos); if (e) return res.status(400).json({ ok: false, error: e }); }
   if (requierePin && bloqueada(req.ip))
     return res.status(429).json({ ok: false, error: 'Demasiados intentos. Espera unos minutos.' });
   try {
