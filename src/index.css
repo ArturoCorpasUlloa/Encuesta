@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1e2433; 
+}
+::-webkit-scrollbar-thumb {
+  background: #404b61; 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #22d3ee; 
+}
+
+/* Impresión / PDF: solo se muestran los gráficos (la barra de navegación y los filtros se ocultan) */
+@page { size: A4 landscape; margin: 10mm; }
+@media print {
+  body { background: #fff !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .no-print { display: none !important; }
+}
