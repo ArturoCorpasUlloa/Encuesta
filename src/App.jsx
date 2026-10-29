@@ -17,6 +17,12 @@ export default function App() {
   const [adminPin, setAdminPin] = useState(''); // PIN validado; solo vive en memoria
   const [verificando, setVerificando] = useState(false);
   const [errorPinMsg, setErrorPinMsg] = useState('');
+  // Recuperación de PIN (código de emergencia guardado en Netlify)
+  const [recuperando, setRecuperando] = useState(false);
+  const [recForm, setRecForm] = useState({ codigo: '', pinNuevo: '', pinNuevo2: '' });
+  const [recMsg, setRecMsg] = useState(null);           // { ok, msg }
+  const [recCargando, setRecCargando] = useState(false);
+  const [pinRestablecido, setPinRestablecido] = useState(false);
   const [usuarios, setUsuarios] = useState([]);
   const [cargandoUsuarios, setCargandoUsuarios] = useState(true);
   const [errorUsuarios, setErrorUsuarios] = useState('');
@@ -105,9 +111,24 @@ export default function App() {
     }
   };
 
+  const restablecerPin = async (e) => {
+    e.preventDefault();
+    setRecMsg(null);
+    if (!recForm.codigo.trim()) return setRecMsg({ ok: false, msg: 'Ingresa el código de recuperación.' });
+    if (!/^\d{4,8}$/.test(recForm.pinNuevo)) return setRecMsg({ ok: false, msg: 'El PIN nuevo debe tener de 4 a 8 dígitos.' });
+    if (recForm.pinNuevo !== recForm.pinNuevo2) return setRecMsg({ ok: false, msg: 'Los dos PIN no coinciden.' });
+    setRecCargando(true);
+    try {
+      await api('restablecerPin', { codigo: recForm.codigo.trim(), pinNuevo: recForm.pinNuevo });
+      setRecForm({ codigo: '', pinNuevo: '', pinNuevo2: '' });
+      setRecuperando(false); setErrorPinMsg(''); setPinRestablecido(true);
+    } catch (err) { setRecMsg({ ok: false, msg: err.message }); }
+    finally { setRecCargando(false); }
+  };
+
   const ingresarAdmin = async (e) => {
     e.preventDefault();
-    setVerificando(true); setErrorPinMsg('');
+    setVerificando(true); setErrorPinMsg(''); setPinRestablecido(false);
     try {
       await api('verificarPin', { pin });
       setAdminPin(pin); setPin(''); setView('admin');
@@ -413,6 +434,34 @@ export default function App() {
             <div className={`${theme.mainBg} w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner`}>
               <Lock className="w-10 h-10 text-cyan-500" />
             </div>
+            {recuperando ? (
+              <>
+                <h2 className={`text-2xl font-bold ${theme.text} mb-2`}>Restablecer PIN</h2>
+                <p className={`${theme.textMuted} mb-6 text-sm`}>Ingresa el código de recuperación (lo conservan los administradores del sitio) y define un PIN nuevo de 4 a 8 dígitos.</p>
+                <form onSubmit={restablecerPin} className="space-y-3 text-left">
+                  <input type="password" autoComplete="off" placeholder="Código de recuperación" value={recForm.codigo}
+                    onChange={(e) => setRecForm({ ...recForm, codigo: e.target.value })}
+                    className={`w-full ${isDark ? 'bg-[#1e2433] text-white' : 'bg-slate-100 text-slate-800'} rounded-lg p-3 focus:ring-2 focus:ring-orange-500 outline-none border ${theme.border}`} />
+                  <input type={showPin ? 'text' : 'password'} inputMode="numeric" maxLength={8} autoComplete="new-password" placeholder="PIN nuevo (4 a 8 dígitos)" value={recForm.pinNuevo}
+                    onChange={(e) => setRecForm({ ...recForm, pinNuevo: e.target.value.replace(/\D/g, '') })}
+                    className={`w-full ${isDark ? 'bg-[#1e2433] text-white' : 'bg-slate-100 text-slate-800'} rounded-lg p-3 focus:ring-2 focus:ring-orange-500 outline-none border ${theme.border}`} />
+                  <input type={showPin ? 'text' : 'password'} inputMode="numeric" maxLength={8} autoComplete="new-password" placeholder="Repite el PIN nuevo" value={recForm.pinNuevo2}
+                    onChange={(e) => setRecForm({ ...recForm, pinNuevo2: e.target.value.replace(/\D/g, '') })}
+                    className={`w-full ${isDark ? 'bg-[#1e2433] text-white' : 'bg-slate-100 text-slate-800'} rounded-lg p-3 focus:ring-2 focus:ring-orange-500 outline-none border ${theme.border}`} />
+                  <button type="button" onClick={() => setShowPin(!showPin)} className={`text-xs ${theme.textMuted} hover:text-cyan-500 flex items-center gap-1`}>
+                    {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />} {showPin ? 'Ocultar PIN' : 'Mostrar PIN'}
+                  </button>
+                  {recMsg && <p role="alert" className={`${recMsg.ok ? 'text-green-500' : 'text-red-500'} text-sm font-semibold`}>{recMsg.msg}</p>}
+                  <button type="submit" disabled={recCargando} className="w-full bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white p-4 rounded-lg font-bold transition-colors flex items-center justify-center gap-2">
+                    {recCargando && <Loader2 className="w-5 h-5 animate-spin" />} Restablecer PIN
+                  </button>
+                </form>
+                <button type="button" onClick={() => { setRecuperando(false); setRecMsg(null); }} className={`mt-4 text-sm ${theme.textMuted} hover:text-cyan-500 underline`}>
+                  Volver
+                </button>
+              </>
+            ) : (
+              <>
             <h2 className={`text-2xl font-bold ${theme.text} mb-2`}>Acceso Administrador</h2>
             <p className={`${theme.textMuted} mb-8`}>Ingrese el PIN de seguridad para acceder.</p>
             <form onSubmit={ingresarAdmin}>
@@ -432,11 +481,17 @@ export default function App() {
                 </button>
               </div>
               
+              {pinRestablecido && <p role="status" className="text-green-500 text-sm mb-4 font-semibold">PIN restablecido. Ingresa con tu nuevo PIN.</p>}
               {errorPinMsg && <p role="alert" className="text-red-500 text-sm mb-4 font-semibold">{errorPinMsg}</p>}
               <button type="submit" disabled={verificando || !pin} className="w-full bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white p-4 rounded-lg font-bold transition-colors flex items-center justify-center gap-2">
                 {verificando && <Loader2 className="w-5 h-5 animate-spin" />} Ingresar
               </button>
             </form>
+            <button type="button" onClick={() => { setRecuperando(true); setRecMsg(null); setErrorPinMsg(''); setPinRestablecido(false); }} className={`mt-5 text-sm ${theme.textMuted} hover:text-cyan-500 underline`}>
+              ¿Olvidaste el PIN?
+            </button>
+              </>
+            )}
           </div>
         </div>
       </div>
