@@ -2,13 +2,18 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download, Loader2, RefreshCw } from 'lucide-react';
 import { api } from './api';
 
-const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const ymd = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const fechaRegistro = (value) => {
+  const [fecha, hora = '00:00:00'] = String(value || '').split(' ');
+  const date = new Date(`${fecha}T${hora}`);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
 
 export default function Informe({ theme, pin }) {
   const hoy = new Date();
-  const [anio, setAnio] = useState(hoy.getFullYear());
-  const [mes, setMes] = useState(hoy.getMonth() + 1);
+  const [desde, setDesde] = useState(ymd(new Date(hoy.getFullYear(), hoy.getMonth(), 1)));
+  const [hasta, setHasta] = useState(ymd(hoy));
   const [datos, setDatos] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
@@ -18,10 +23,28 @@ export default function Informe({ theme, pin }) {
 
   const cargar = useCallback(async () => {
     setCargando(true); setError('');
-    try { setDatos((await api('pendientes', { pin, anio, mes })).usuarios); }
+    try {
+      const [{ usuarios }, { encuestas }] = await Promise.all([
+        api('listarTodosUsuarios', { pin }),
+        api('listarEncuestas', { pin }),
+      ]);
+      const realizadas = new Map();
+      encuestas.forEach((encuesta) => {
+        const fecha = fechaRegistro(encuesta.Fecha_Registro);
+        const fechaTexto = fecha ? ymd(fecha) : '';
+        if (fechaTexto && fechaTexto >= desde && fechaTexto <= hasta) {
+          realizadas.set(String(encuesta.ID_Usuario), fechaTexto);
+        }
+      });
+      setDatos(usuarios.filter((u) => u.activo).map((u) => ({
+        ...u,
+        realizada: realizadas.has(String(u.id)),
+        fecha: realizadas.get(String(u.id)) || '',
+      })));
+    }
     catch (e) { setError(e.message); setDatos([]); }
     finally { setCargando(false); }
-  }, [pin, anio, mes]);
+  }, [pin, desde, hasta]);
   useEffect(() => { cargar(); }, [cargar]);
 
   const areas = useMemo(() => [...new Set(datos.map((u) => u.area))].sort(), [datos]);
@@ -35,12 +58,12 @@ export default function Informe({ theme, pin }) {
 
   const descargar = () => {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const filas = [['ID', 'Nombre', 'Área', `Encuesta ${MESES[mes - 1]} ${anio}`, 'Fecha de realización'],
+    const filas = [['ID', 'Nombre', 'Área', `Encuesta ${desde} a ${hasta}`, 'Fecha de realización'],
       ...visibles.map((u) => [u.id, u.nombre, u.area, u.realizada ? '✔️' : '✖️', u.fecha])];
     const csv = 'sep=;\n' + filas.map((f) => f.map(esc).join(';')).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = `informe_usuarios_${anio}-${String(mes).padStart(2, '0')}.csv`;
+    a.download = `informe_usuarios_${desde}_a_${hasta}.csv`;
     a.click(); URL.revokeObjectURL(a.href);
   };
 
@@ -55,13 +78,11 @@ export default function Informe({ theme, pin }) {
     <div className="max-w-7xl mx-auto p-6 space-y-6 mt-4">
       <div className={`${theme.cardBg} border ${theme.border} rounded-xl p-6 flex flex-wrap items-end gap-4`}>
         <h2 className={`text-lg font-bold ${theme.text} mr-auto`}>Informe de encuestas por usuario</h2>
-        <label className={`text-sm ${theme.textMuted} flex flex-col gap-1`}>Mes
-          <select value={mes} onChange={(e) => setMes(Number(e.target.value))} className={inp}>{MESES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select>
+        <label className={`text-sm ${theme.textMuted} flex flex-col gap-1`}>Fecha inicio
+          <input type="date" value={desde} max={hasta} onChange={(e) => setDesde(e.target.value)} className={inp} />
         </label>
-        <label className={`text-sm ${theme.textMuted} flex flex-col gap-1`}>Año
-          <select value={anio} onChange={(e) => setAnio(Number(e.target.value))} className={inp}>
-            {[0, 1, 2, 3].map((d) => hoy.getFullYear() - d).map((a) => <option key={a} value={a}>{a}</option>)}
-          </select>
+        <label className={`text-sm ${theme.textMuted} flex flex-col gap-1`}>Fecha fin
+          <input type="date" value={hasta} min={desde} onChange={(e) => setHasta(e.target.value)} className={inp} />
         </label>
         <label className={`text-sm ${theme.textMuted} flex flex-col gap-1`}>Área
           <select value={areaF} onChange={(e) => setAreaF(e.target.value)} className={inp}>
