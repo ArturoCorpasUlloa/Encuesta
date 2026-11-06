@@ -43,7 +43,7 @@ export function normalizarRegistros(docs) {
     });
 
     const maxSev = zonas.reduce((m, z) => Math.max(m, z.sev), 0);
-    const nivel = maxSev >= 7 ? 'critico' : zonas.length || enfermedades.length ? 'sintomas' : 'sano';
+    const nivel = enfermedades.length ? 'critico' : zonas.length ? 'sintomas' : 'sano';
     const semaforo = maxSev === 0 ? 'Sin dolor' : maxSev <= 3 ? 'Leve' : maxSev <= 6 ? 'Medio' : 'Alto';
 
     return {
@@ -156,8 +156,8 @@ export function calcular(regs, { anioSel, todosSede }) {
 
   const estado = [
     { name: 'Personal sano', value: sanos },
-    { name: 'Con síntomas / enfermedad', value: conSintomas },
-    { name: 'Casos críticos', value: criticos },
+    { name: 'Sintomático', value: conSintomas },
+    { name: 'Crítico', value: criticos },
   ].filter((x) => x.value > 0);
 
   // ---- Por sede
@@ -298,7 +298,7 @@ export function exportarCSV(regs) {
       r.fecha.toISOString().slice(0, 10), r.nombre, r.cc, d.fechaNacimiento, d.fechaIngreso, d.cargo, r.sede,
       ...enfermedadesList.map((_, i) => (r.enfermedades.includes(i) ? 'SI' : 'NO')),
       ...zonasCuerpo.map((z) => r.zonas.find((x) => x.id === z.paramId)?.sev ?? 0),
-      r.maxSev, r.nivel === 'critico' ? 'Crítico' : r.nivel === 'sintomas' ? 'Con síntomas' : 'Sano',
+      r.maxSev, r.nivel === 'critico' ? 'Crítico' : r.nivel === 'sintomas' ? 'Sintomático' : 'Sano',
     ];
   });
   const csv = 'sep=;\n' + [cab, ...filas].map((f) => f.map(esc).join(';')).join('\n');

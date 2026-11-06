@@ -15,8 +15,8 @@ const C = {
   amarillo: '#facc15', violeta: '#a78bfa', rosa: '#f472b6', azul: '#60a5fa',
 };
 const SERIE_SEDES = [C.cian, C.naranja, C.violeta, C.verde, C.rosa, C.azul, C.amarillo, C.rojo];
-const COLOR_ESTADO = { 'Personal sano': C.verde, 'Con síntomas / enfermedad': C.amarillo, 'Casos críticos': C.rojo };
-const NIVEL_ESTADO = { 'Personal sano': 'sano', 'Con síntomas / enfermedad': 'sintomas', 'Casos críticos': 'critico' };
+const COLOR_ESTADO = { 'Personal sano': C.verde, Sintomático: C.amarillo, Crítico: C.rojo };
+const NIVEL_ESTADO = { 'Personal sano': 'sano', Sintomático: 'sintomas', Crítico: 'critico' };
 const CF_VACIO = { estado: null, semaforo: null, enfermedad: null, zona: null, cargo: null, area: null, mes: null, antiguedad: null, edad: null };
 const DIMS = Object.keys(CF_VACIO);
 const COLOR_SEM = { 'Sin dolor': '#4ade80', Leve: '#facc15', Medio: '#f97316', Alto: '#ef4444' };
@@ -44,6 +44,24 @@ function useEncuestas(pin) {
   }, [cargar]);
 
   return { ...estado, recargar: () => cargar(false) };
+}
+
+function useUsuarios(pin) {
+  const [estado, setEstado] = useState({ usuarios: [], error: null });
+
+  useEffect(() => {
+    let activo = true;
+    api('listarTodosUsuarios', { pin })
+      .then(({ usuarios }) => {
+        if (activo) setEstado({ usuarios: usuarios.filter((u) => u.activo), error: null });
+      })
+      .catch((err) => {
+        if (activo) setEstado({ usuarios: [], error: err.message });
+      });
+    return () => { activo = false; };
+  }, [pin]);
+
+  return estado;
 }
 
 /* ------------------------------------------------------------------ */
@@ -145,6 +163,7 @@ function MapaCalor({ filas, sedes, theme, isDark, color }) {
 /* ------------------------------------------------------------------ */
 export default function Dashboard({ theme, isDark, pin, onImprimir }) {
   const { status, docs, error, actualizado, recargar } = useEncuestas(pin);
+  const { usuarios, error: usuariosError } = useUsuarios(pin);
   const [anio, setAnio] = useState('todos');
   const [sede, setSede] = useState('todas');           // "sede" = área del usuario
   const [enfermedad, setEnfermedad] = useState('todas');
@@ -165,6 +184,26 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
     (!desde || ymd(r.fecha) >= desde) && (!hasta || ymd(r.fecha) <= hasta)
   ), [registros, sede, enfermedad, desde, hasta]);
   const filtrados = useMemo(() => porSede.filter((r) => anio === 'todos' || r.anio === Number(anio)), [porSede, anio]);
+  const periodoPendientes = useMemo(() => {
+    const hoy = new Date();
+    const inicio = desde || ymd(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+    const fin = hasta || ymd(hoy);
+    return { inicio, fin };
+  }, [desde, hasta]);
+  const pendientes = useMemo(() => {
+    const usuariosPeriodo = usuarios.filter((u) => sede === 'todas' || u.area === sede);
+    const respondieron = new Set(
+      registros
+        .filter((r) => ymd(r.fecha) >= periodoPendientes.inicio && ymd(r.fecha) <= periodoPendientes.fin)
+        .filter((r) => sede === 'todas' || r.sede === sede)
+        .map((r) => String(r.raw.idUsuario))
+    );
+    return {
+      total: usuariosPeriodo.length,
+      realizadas: usuariosPeriodo.filter((u) => respondieron.has(String(u.id))).length,
+      pendientes: usuariosPeriodo.filter((u) => !respondieron.has(String(u.id))).length,
+    };
+  }, [usuarios, registros, sede, periodoPendientes]);
 
   // ---- Filtro cruzado entre gráficos (clic en un gráfico = filtro para los demás) ----
   const [cf, setCf] = useState(CF_VACIO);
@@ -336,7 +375,9 @@ export default function Dashboard({ theme, isDark, pin, onImprimir }) {
             <Kpi theme={theme} titulo="Prevalencia de dolor" valor={`${k.pctDolor}%`} color="text-amber-500"
               detalle={`${k.conDolor} ${k.conDolor === 1 ? 'persona' : 'personas'} con dolor en el último mes`} />
             <Kpi theme={theme} titulo="Casos críticos" valor={k.criticos} color="text-red-500"
-              detalle={`${k.pctCriticos}% · severidad ≥ 7 en alguna zona`} />
+              detalle={`${k.pctCriticos}% · con enfermedad diagnosticada`} />
+            <Kpi theme={theme} titulo="Pendientes de encuesta" valor={pendientes.pendientes} color="text-red-500"
+              detalle={usuariosError ? `Error: ${usuariosError}` : `${periodoPendientes.inicio} a ${periodoPendientes.fin} · ${pendientes.realizadas}/${pendientes.total} realizadas`} />
             <Kpi theme={theme} titulo="Con enfermedad diagnosticada" valor={`${k.pctEnf}%`} color="text-orange-500"
               detalle={`${k.conEnf} ${k.conEnf === 1 ? 'persona' : 'personas'}`} />
             <Kpi theme={theme} titulo="Severidad promedio" valor={k.sevProm != null ? `${k.sevProm} / 10` : '—'} color="text-orange-500"
